@@ -1308,7 +1308,7 @@ ggplot(data=subset(all_year,  !is.na(Case)   ))  +
     
     aes(x     = Total_Precip, 
         color = Case,
-        line  = Ensemble) +
+        line  = Ensemble) + 
     
 
     geom_density() +
