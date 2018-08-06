@@ -1,0 +1,37 @@
+---
+title: "Demo of using geoknife to open LOCA data"
+output: html_notebook
+---
+ 
+
+
+```{r}
+
+library(ncdf4)
+library(chron)
+library(tidyr)
+library(ggplot2)
+
+```
+
+
+```{r}
+loca_nc <- nc_open("http://cida.usgs.gov/thredds/dodsC/loca_future")
+loca_globals <- ncatt_get(loca_nc, varid = 0)
+names(loca_globals) # Available global attributes.
+```
+
+```{r}
+names(loca_nc)
+```
+
+
+```{r}
+names(loca_nc$dim) # Dimensions of the ncdf4 object.
+```
+
+
+```{r}
+loca_nc$nvars # How many variables are available from the ncdf4 object.
+```
+

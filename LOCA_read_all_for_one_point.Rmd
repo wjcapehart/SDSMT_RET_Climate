@@ -1,0 +1,912 @@
+---
+title: "netCDF LOCA Data Import Data Block"
+output: html_notebook
+---
+
+#1 Intro
+
+This script is the reading section of pulling LOCA data.
+
+## 1a. Loading Libraries
+
+
+```{r}
+
+  # Libraries 
+
+  require("ncdf4")          # netCDF file access
+  require("ncdf4.helpers")  # netCDF support files
+  require("ggplot2")        # ggplot2 package (what could go wrong?)
+  require("lubridate")      # data control
+  require("reshape2")       # reshaping arrays
+  require("abind")          # for concatenating data frames
+
+```
+
+# 2. Cresting Scenario Data
+
+## 2a. Target Location, Latitude, and Longitude
+
+```{r}
+
+  # Select and Identify Targets.
+  
+  target_lon = -103.0573 + 360.   # degrees east 
+  target_lat =   44.0435          # degrees north
+  target_name = "Rapid City, SD"  # human station name
+  target_abbr = "KRAP"            # simple character code (I use 4-letter ICAOs)
+
+```
+
+## 2b. Ensemble Members, Variables, and Scenarios
+
+```{r}
+
+  # Ensemble Members
+
+  ensembles = c( "ACCESS1-0_r1i1p1",
+                 "ACCESS1-3_r1i1p1",
+                 "CCSM4_r6i1p1",
+                 "CESM1-BGC_r1i1p1",
+                 "CESM1-CAM5_r1i1p1",
+                 "CMCC-CMS_r1i1p1",
+                 "CMCC-CM_r1i1p1",
+                 "CNRM-CM5_r1i1p1",
+                 "CSIRO-Mk3-6-0_r1i1p1",
+                 "CanESM2_r1i1p1",
+                 "FGOALS-g2_r1i1p1",
+                 "GFDL-CM3_r1i1p1",
+                 "GFDL-ESM2G_r1i1p1",
+                 "GFDL-ESM2M_r1i1p1",
+                 "HadGEM2-AO_r1i1p1",
+                 "HadGEM2-CC_r1i1p1",
+                 "HadGEM2-ES_r1i1p1",
+                 "IPSL-CM5A-LR_r1i1p1",
+                 "IPSL-CM5A-MR_r1i1p1",
+                 "MIROC-ESM-CHEM_r1i1p1",
+                 "MIROC-ESM_r1i1p1",
+                 "MIROC5_r1i1p1",
+                 "MPI-ESM-LR_r1i1p1",
+                 "MPI-ESM-MR_r1i1p1",
+                 "MRI-CGCM3_r1i1p1",
+                 "NorESM1-M_r1i1p1",
+                 "bcc-csm1-1-m_r1i1p1" )
+
+variables = c("pr", "tasmax", "tasmin")
+
+scenarios = c("historical", "rcp45", "rcp85" )
+
+```
+
+
+# 2c. Opening OPeNDAP Remote File Information
+
+
+```{r}
+
+  # OPeNDAP Data Set to pull coordinates 
+
+  root_url     = "http://kyrill.ias.sdsmt.edu:8080/thredds/dodsC/LOCA_SODAK"
+  dataset_name = "SODAK_LOCA"
+
+
+```
+
+
+# 3. Pulling Metadata (Coordinates for time and location)
+
+## 3a. Crack one History file and one RCP file open for reading
+
+```{r}  
+  
+  # File Control and Opening
+  
+  var  = 1 # precip
+  ens  = 1 # ensembles scenarios
+  scen = 2 # RCP 4.5
+  
+  variable_rcp45  = paste(variables[var],  "_",
+                          ensembles[ens],  "_",
+                          scenarios[scen],
+                          sep = "")
+  
+  thredd_URL_rcp45 = paste(root_url,        "/",
+                           scenarios[scen], "/",
+                           variables[var],  "/",
+                           dataset_name,    "_",
+                           variable_rcp45,  ".nc",
+                           sep = "")
+
+  scen = 1
+
+  variable_histo  = paste(variables[var],   "_",
+                          ensembles[ens],   "_",
+                          scenarios[scen], 
+                          sep = "")
+  
+  thredd_URL_histo = paste(root_url,        "/",
+                           scenarios[scen], "/",
+                           variables[var],  "/",
+                           dataset_name,    "_",
+                           variable_histo,  ".nc",
+                           sep = "")
+
+
+  # here we will open up the files
+  #  we will try to include details in the argument list 
+  #     for the functions we use in this demo
+
+  nc.histo = nc_open(filename = thredd_URL_histo)  # name of the file
+  nc.rcp45 = nc_open(filename = thredd_URL_rcp45)  # name of the file
+  
+```
+
+## 3b. Get Spatial Coordiantes
+
+```{r}
+
+  # Extracting Latitude and Longitude Arrays
+  
+  lon =  ncvar_get(nc    = nc.rcp45, # netCDF file handle
+                   varid =    "lon") # netCDF variable name
+  
+  lat =  ncvar_get(nc    = nc.rcp45, # netCDF file handle
+                   varid =    "lat") # netCDF variable name
+
+  # Get Point Coordinate Closest to Target Lat/Lon
+  i_lon = which.min( abs(lon-target_lon) ) # which.min returns the index of the lowest value
+  j_lat = which.min( abs(lat-target_lat) )
+  
+```
+
+## 3c. Get Time Coordinates (need two sets, one for historical era, one for future era)
+
+```{r}
+
+# Extracting Time Coordinate Arrays
+
+  # Historical Case
+  
+  time_histo = nc.get.time.series(f                            = nc.histo, # netCDF file handle
+                                  time.dim.name                =   "time", # netCDF time coordinate name
+                                  correct.for.gregorian.julian =    FALSE) # fix for julian calendar?
+
+  # Convert from climate-science friendly PCICt format to R's prefered POSIXct format
+
+  time_histo = as.POSIXct(time_histo)
+  
+  nt_histo   = length(time_histo)
+  
+  
+  # Historical Case
+  
+  time_rcpXX = nc.get.time.series(f                            = nc.rcp45, # netCDF file handle
+                                  time.dim.name                =   "time", # netCDF time coordinate name
+                                  correct.for.gregorian.julian =    FALSE) # fix for julian calendar?
+
+  # Convert from climate-science friendly PCICt format to R's prefered POSIXct format
+
+  time_rcpXX = as.POSIXct(time_rcpXX)
+  
+  nt_rcpXX   = length(time_rcpXX)
+
+  # we're closed with our first read so let's close thise files
+  
+  nc_close(nc = nc.rcp45)
+  nc_close(nc = nc.histo)
+  
+```
+
+## 3d. Get rid of unnecessary variables.
+
+```{r}
+
+# and clean things up... 
+  
+  remove(nc.rcp45)
+  remove(nc.histo)
+  remove(thredd_URL_rcp45)
+  remove(thredd_URL_histo)
+  remove(lon)
+  remove(lat)
+  remove(variable_histo)
+  remove(variable_rcp45)
+
+```
+
+# 4.  Data Extraction of Time Series
+  
+Now for the Scary Part.  We are going to do a set of loops to pull in the data.  We'll need to do all of this in one {r} code block.
+
+```{r}
+# Data Import
+
+  # Part 1:  Extract the LOCA Data into Columnmar Data Frames
+
+  # For each Variable and Scenario, do the following
+  #    Create Data Frame (time only for the given scenario)
+  #    Loop through all files and extract the time series for our target point
+
+```
+
+# 4a. Historical Cases
+
+```{r}
+
+#### Historical Case 
+
+    print("Processing Pre-2006 Scenarios")
+
+
+    scen = 1 # historical
+    ens  = 1 # ensemble member (for testing, this get looped)
+
+    histo_pr = data.frame(Time = time_histo)
+    
+    histo_pr$Scenario = "Historical"
+    
+    histo_tx = histo_pr
+    histo_tn = histo_pr
+
+    histo_pr$Variable = "pr"
+    histo_tx$Variable = "tasmax"
+    histo_tn$Variable = "tasmin"
+
+    
+    for ( ens in 1:length(ensembles) )  {
+
+      #####################################
+      #
+      # Precipitation
+      #
+      
+      var  = 1 # precip (for testing, this get perscribed in loop)
+
+      variable_name  = paste(variables[var],   "_",
+                             ensembles[ens],   "_",
+                             scenarios[scen], 
+                             sep = "")
+
+      print(paste("---processing    ", 
+                  variable_name,
+                  sep = " ")  ) 
+  
+      thredd_URL      = paste(root_url,        "/",
+                              scenarios[scen], "/",
+                              variables[var],  "/",
+                              dataset_name,    "_",
+                              variable_name,   ".nc",
+                              sep = "")
+      
+      nc.file = nc_open(filename = thredd_URL)  # name of the file
+
+      in_vector = ncvar_get(nc   =                     nc.file, # netCDF file handle
+                            varid =              variable_name, # netCDF variable name
+                            start = c(i_lon, j_lat,         1), # netCDF start indicies
+                            count = c(     1,    1,  nt_histo)) # netCDF imported lengths
+      
+      histo_pr$in_vector = as.numeric(in_vector)
+      
+      names(histo_pr)[3+ens] = ensembles[ens]
+
+      #      
+      #####################################
+
+      #####################################
+      #
+      # Max Air Temperature
+      #
+      
+      var  = 2 # tasmax (for testing, this get perscribed in loop)
+
+      variable_name  = paste(variables[var],   "_",
+                             ensembles[ens],   "_",
+                             scenarios[scen], 
+                             sep = "")
+      
+      print(paste("---processing", 
+                  variable_name,
+                  sep = " ")  ) 
+  
+      thredd_URL      = paste(root_url,        "/",
+                              scenarios[scen], "/",
+                              variables[var],  "/",
+                              dataset_name,    "_",
+                              variable_name,   ".nc",
+                              sep = "")
+      
+      nc.file = nc_open(filename = thredd_URL)  # name of the file
+
+      in_vector = ncvar_get(nc   =                     nc.file, # netCDF file handle
+                            varid =              variable_name, # netCDF variable name
+                            start = c(i_lon, j_lat,         1), # netCDF start indicies
+                            count = c(     1,    1,  nt_histo)) # netCDF imported lengths
+      
+      nc_close(nc.file)
+      
+      histo_tx$in_vector = as.numeric(in_vector)
+      
+      names(histo_tx)[3+ens] = ensembles[ens]
+
+      #      
+      #####################################
+      
+      #####################################
+      #
+      # Min Air Temperature
+      #
+      
+      var  = 3 # tasmin (for testing, this get perscribed in loop)
+
+      variable_name  = paste(variables[var],   "_",
+                             ensembles[ens],   "_",
+                             scenarios[scen], 
+                             sep = "")
+      
+      print(paste("---processing", 
+                  variable_name,
+                  sep = " ")  ) 
+  
+      thredd_URL      = paste(root_url,        "/",
+                              scenarios[scen], "/",
+                              variables[var],  "/",
+                              dataset_name,    "_",
+                              variable_name,   ".nc",
+                              sep = "")
+      
+      nc.file = nc_open(filename = thredd_URL)  # name of the file
+
+      in_vector = ncvar_get(nc   =                     nc.file, # netCDF file handle
+                            varid =              variable_name, # netCDF variable name
+                            start = c(i_lon, j_lat,         1), # netCDF start indicies
+                            count = c(     1,    1,  nt_histo)) # netCDF imported lengths
+      
+      nc_close(nc.file)
+
+      histo_tn$in_vector = as.numeric(in_vector)
+      
+      names(histo_tn)[3+ens] = ensembles[ens]
+
+      #      
+      #####################################
+      
+    }
+    
+    print(" ")
+    
+    # cleanup
+    
+    remove(in_vector)
+    remove(variable_name)
+    remove(thredd_URL)
+    remove(var)
+    remove(scen)
+    remove(ens)
+
+```
+
+# 4b. RCP 4.5 Cases
+
+```{r}
+
+#### RCP 4.5  Case 
+
+    print("Processing RCP 4.5 CMIP-5 Scenario")
+
+    scen = 2 # RCP 4.5
+
+    rcp45_pr = data.frame(Time = time_rcpXX)
+    
+    rcp45_pr$Scenario = "RCP 4.5"
+    
+    rcp45_tx = rcp45_pr
+    rcp45_tn = rcp45_pr
+
+    rcp45_pr$Variable = "pr"
+    rcp45_tx$Variable = "tasmax"
+    rcp45_tn$Variable = "tasmin"
+
+    for ( ens in 1:length(ensembles) )  {
+
+      #####################################
+      #
+      # Precipitation
+      #
+      
+      var  = 1 # precip (for testing, this get perscribed in loop)
+
+      variable_name  = paste(variables[var],   "_",
+                             ensembles[ens],   "_",
+                             scenarios[scen], 
+                             sep = "")
+      
+      print(paste("---processing    ", 
+                  variable_name,
+                  sep = " ")  ) 
+  
+      thredd_URL      = paste(root_url,        "/",
+                              scenarios[scen], "/",
+                              variables[var],  "/",
+                              dataset_name,    "_",
+                              variable_name,   ".nc",
+                              sep = "")
+      
+      nc.file = nc_open(filename = thredd_URL)  # name of the file
+
+      in_vector = ncvar_get(nc   =                     nc.file, # netCDF file handle
+                            varid =              variable_name, # netCDF variable name
+                            start = c(i_lon, j_lat,         1), # netCDF start indicies
+                            count = c(     1,    1,  nt_rcpXX)) # netCDF imported lengths
+      
+      rcp45_pr$in_vector = as.numeric(in_vector)
+      
+      names(rcp45_pr)[3+ens] = ensembles[ens]
+
+      #      
+      #####################################
+
+      #####################################
+      #
+      # Max Air Temperature
+      #
+      
+      var  = 2 # tasmax (for testing, this get perscribed in loop)
+
+      variable_name  = paste(variables[var],   "_",
+                             ensembles[ens],   "_",
+                             scenarios[scen], 
+                             sep = "")
+      
+      print(paste("---processing", 
+                  variable_name,
+                  sep = " ")  ) 
+  
+      thredd_URL      = paste(root_url,        "/",
+                              scenarios[scen], "/",
+                              variables[var],  "/",
+                              dataset_name,    "_",
+                              variable_name,   ".nc",
+                              sep = "")
+      
+      nc.file = nc_open(filename = thredd_URL)  # name of the file
+
+      in_vector = ncvar_get(nc   =                     nc.file, # netCDF file handle
+                            varid =              variable_name, # netCDF variable name
+                            start = c(i_lon, j_lat,         1), # netCDF start indicies
+                            count = c(     1,    1,  nt_rcpXX)) # netCDF imported lengths
+      
+      nc_close(nc.file)
+      
+      rcp45_tx$in_vector = as.numeric(in_vector)
+      
+      names(rcp45_tx)[3+ens] = ensembles[ens]
+
+      #      
+      #####################################
+      
+      #####################################
+      #
+      # Min Air Temperature
+      #
+      
+      var  = 3 # tasmin (for testing, this get perscribed in loop)
+
+      variable_name  = paste(variables[var],   "_",
+                             ensembles[ens],   "_",
+                             scenarios[scen], 
+                             sep = "")
+      
+      print(paste("---processing", 
+                  variable_name,
+                  sep = " ")  ) 
+  
+      thredd_URL      = paste(root_url,        "/",
+                              scenarios[scen], "/",
+                              variables[var],  "/",
+                              dataset_name,    "_",
+                              variable_name,   ".nc",
+                              sep = "")
+      
+      nc.file = nc_open(filename = thredd_URL)  # name of the file
+
+      in_vector = ncvar_get(nc   =                     nc.file, # netCDF file handle
+                            varid =              variable_name, # netCDF variable name
+                            start = c(i_lon, j_lat,         1), # netCDF start indicies
+                            count = c(     1,    1,  nt_rcpXX)) # netCDF imported lengths
+      
+      nc_close(nc.file)
+
+      rcp45_tn$in_vector = as.numeric(in_vector)
+      
+      names(rcp45_tn)[3+ens] = ensembles[ens]
+
+      #      
+      #####################################
+      
+    }
+    
+    print(" ")
+
+    # cleanup
+    
+    remove(in_vector)
+    remove(variable_name)
+    remove(thredd_URL)
+    remove(var)
+    remove(scen)
+    remove(ens)
+    
+```
+
+
+# 4c. RCP 8.5 Cases
+
+```{r}
+
+#### RCP 8.5  Case 
+
+    print("Processing RCP 8.5 CMIP-5 Scenario")
+
+    scen = 3 # RCP 8.5
+
+    rcp85_pr = data.frame(Time = time_rcpXX)
+    
+    rcp85_pr$Scenario = "RCP 8.5"
+  
+    rcp85_tx = rcp85_pr
+    rcp85_tn = rcp85_pr
+
+    rcp85_pr$Variable = "pr"
+    rcp85_tx$Variable = "tasmax"
+    rcp85_tn$Variable = "tasmin"
+
+    for ( ens in 1:length(ensembles) )  {
+
+      #####################################
+      #
+      # Precipitation
+      #
+      
+      var  = 1 # precip (for testing, this get perscribed in loop)
+
+      variable_name  = paste(variables[var],   "_",
+                             ensembles[ens],   "_",
+                             scenarios[scen], 
+                             sep = "")
+      
+      print(paste("---processing    ", 
+                  variable_name,
+                  sep = " ")  ) 
+  
+      thredd_URL      = paste(root_url,        "/",
+                              scenarios[scen], "/",
+                              variables[var],  "/",
+                              dataset_name,    "_",
+                              variable_name,   ".nc",
+                              sep = "")
+      
+      nc.file = nc_open(filename = thredd_URL)  # name of the file
+
+      in_vector = ncvar_get(nc   =                     nc.file, # netCDF file handle
+                            varid =              variable_name, # netCDF variable name
+                            start = c(i_lon, j_lat,         1), # netCDF start indicies
+                            count = c(     1,    1,  nt_rcpXX)) # netCDF imported lengths
+      
+      rcp85_pr$in_vector = as.numeric(in_vector)
+      
+      names(rcp85_pr)[3+ens] = ensembles[ens]
+
+      #      
+      #####################################
+            
+      #####################################
+      #
+      # Max Air Temperature
+      #
+      
+      var  = 2 # tasmax (for testing, this get perscribed in loop)
+
+      variable_name  = paste(variables[var],   "_",
+                             ensembles[ens],   "_",
+                             scenarios[scen], 
+                             sep = "")
+      
+      print(paste("---processing", 
+                  variable_name,
+                  sep = " ")  ) 
+  
+      thredd_URL      = paste(root_url,        "/",
+                              scenarios[scen], "/",
+                              variables[var],  "/",
+                              dataset_name,    "_",
+                              variable_name,   ".nc",
+                              sep = "")
+      
+      nc.file = nc_open(filename = thredd_URL)  # name of the file
+
+      in_vector = ncvar_get(nc   =                     nc.file, # netCDF file handle
+                            varid =              variable_name, # netCDF variable name
+                            start = c(i_lon, j_lat,         1), # netCDF start indicies
+                            count = c(     1,    1,  nt_rcpXX)) # netCDF imported lengths
+      
+      nc_close(nc.file)
+      
+      rcp85_tx$in_vector = as.numeric(in_vector)
+      
+      names(rcp85_tx)[3+ens] = ensembles[ens]
+
+      #      
+      #####################################
+            
+      #####################################
+      #
+      # Min Air Temperature
+      #
+      
+      var  = 3 # tasmin (for testing, this get perscribed in loop)
+
+      variable_name  = paste(variables[var],   "_",
+                             ensembles[ens],   "_",
+                             scenarios[scen], 
+                             sep = "")
+      
+      print(paste("---processing", 
+                  variable_name,
+                  sep = " ")  ) 
+  
+      thredd_URL      = paste(root_url,        "/",
+                              scenarios[scen], "/",
+                              variables[var],  "/",
+                              dataset_name,    "_",
+                              variable_name,   ".nc",
+                              sep = "")
+      
+      nc.file = nc_open(filename = thredd_URL)  # name of the file
+
+      in_vector = ncvar_get(nc   =                     nc.file, # netCDF file handle
+                            varid =              variable_name, # netCDF variable name
+                            start = c(i_lon, j_lat,         1), # netCDF start indicies
+                            count = c(     1,    1,  nt_rcpXX)) # netCDF imported lengths
+      
+      nc_close(nc.file)
+
+      rcp85_tn$in_vector = as.numeric(in_vector)
+      
+      names(rcp85_tn)[3+ens] = ensembles[ens]
+
+      #      
+      #####################################
+      
+    }
+    
+    print(" ")
+        
+    # cleanup
+    
+    remove(in_vector)
+    remove(variable_name)
+    remove(thredd_URL)
+    remove(var)
+    remove(scen)
+    remove(ens)
+    
+```
+
+```{r}
+
+save(dataset_name,
+     target_name,
+     target_abbr,
+     target_lon,
+     target_lat,
+     histo_pr,
+     histo_tx,
+     histo_tn,
+     rcp45_pr,
+     rcp45_tx,
+     rcp45_tn,
+     rcp85_pr,
+     rcp85_tx,
+     rcp85_tn,
+     file = paste("LOCA_1_",
+                  target_abbr,
+                  ".Rdata",
+                  sep = ""))
+
+```
+
+
+# 5.  Creating Data Frames
+
+```{r}
+
+# Data Frame Creation
+
+  # We have arrays for each scenario.  We will now merge them into a single data frame.
+
+```
+
+## 5a. Merging Historical Cases
+
+```{r}
+
+  # We start with the history case with the melt function
+
+  histo.pr =   melt(data          = histo_pr,        # your array
+                    na.rm         = FALSE,           # use missing values
+                    id.vars       =  c(    "Time",   # names of your two dimensions    
+                                       "Variable",
+                                       "Scenario"),  
+                    variable.name = "Ensemble",      # new for new dimensions
+                    value.name    = "Daily_Precip")  # the final name of your aray value
+  
+  histo.tx =   melt(data          = histo_tx,         # your array
+                    na.rm         = FALSE,            # use missing values
+                    id.vars       =  c(    "Time",    # names of your two dimensions    
+                                       "Variable",
+                                       "Scenario"),  
+                    variable.name = "Ensemble",       # new for new dimensions
+                    value.name    = "Daily_Max_Temp") # the final name of your aray value
+
+  histo.tn =   melt(data          = histo_tn,         # your array
+                    na.rm         = FALSE,            # use missing values
+                    id.vars       =  c(    "Time",    # names of your two dimensions    
+                                       "Variable",
+                                       "Scenario"),  
+                    variable.name = "Ensemble",       # new for new dimensions
+                    value.name    = "Daily_Min_Temp") # the final name of your aray value
+  
+  # Now we put them all into one data frame for all historical period data
+  
+  historical = histo.pr
+  
+  historical$Daily_Max_Temp = histo.tx$Daily_Max_Temp
+  historical$Daily_Min_Temp = histo.tn$Daily_Min_Temp
+
+  # And Clean the Mess
+
+  remove(histo.pr)
+  remove(histo.tx)
+  remove(histo.tn)
+
+```
+
+## 5b. Merging RCP 4.5 Cases
+
+```{r}
+
+  # Now we process the RCP 4.5 projection case with the melt function
+
+  rcp45.pr =   melt(data          = rcp45_pr,        # your array
+                    na.rm         = FALSE,           # use missing values
+                    id.vars       =  c(    "Time",   # names of your two dimensions    
+                                       "Variable",
+                                       "Scenario"),  
+                    variable.name = "Ensemble",      # new for new dimensions
+                    value.name    = "Daily_Precip")  # the final name of your aray value
+
+  rcp45.tx =   melt(data          = rcp45_tx,         # your array
+                    na.rm         = FALSE,            # use missing values
+                    id.vars       =  c(    "Time",    # names of your two dimensions    
+                                       "Variable",
+                                       "Scenario"),  
+                    variable.name = "Ensemble",       # new for new dimensions
+                    value.name    = "Daily_Max_Temp") # the final name of your aray value
+
+  rcp45.tn =   melt(data          = rcp45_tn,         # your array
+                    na.rm         = FALSE,            # use missing values
+                    id.vars       =  c(   "Time",    # names of your two dimensions    
+                                       "Variable",
+                                       "Scenario"),  
+                    variable.name = "Ensemble",       # new for new dimensions
+                    value.name    = "Daily_Min_Temp") # the final name of your aray value
+  
+  # Now we put them all into one data frame for all RCP 4.5 projection data
+  
+  rcp45 = rcp45.pr
+  
+  rcp45$Daily_Max_Temp = rcp45.tx$Daily_Max_Temp
+  rcp45$Daily_Min_Temp = rcp45.tn$Daily_Min_Temp
+
+  # And Clean the Mess
+
+  remove(rcp45.pr)
+  remove(rcp45.tx)
+  remove(rcp45.tn)
+
+```
+
+## 5c. Merging RCP 8.5 Cases
+ 
+```{r}
+
+  # Finally we process the RCP 8.5 projection case with the melt function
+
+  rcp85.pr =   melt(data          = rcp85_pr,        # your array
+                    na.rm         = FALSE,           # use missing values
+                    id.vars       =  c(    "Time",   # names of your two dimensions    
+                                       "Variable",
+                                       "Scenario"),  
+                    variable.name = "Ensemble",      # new for new dimensions
+                    value.name    = "Daily_Precip")  # the final name of your aray value
+
+  rcp85.tx =   melt(data          = rcp85_tx,         # your array
+                    na.rm         = FALSE,            # use missing values
+                    id.vars       =  c(    "Time",    # names of your two dimensions    
+                                       "Variable",
+                                       "Scenario"),  
+                    variable.name = "Ensemble",       # new for new dimensions
+                    value.name    = "Daily_Max_Temp") # the final name of your aray value
+
+  rcp85.tn =   melt(data          = rcp85_tn,         # your array
+                    na.rm         = FALSE,            # use missing values
+                    id.vars       =  c(    "Time",    # names of your two dimensions    
+                                       "Variable",
+                                       "Scenario"),  
+                    variable.name = "Ensemble",       # new for new dimensions
+                    value.name    = "Daily_Min_Temp") # the final name of your aray value
+  
+  # Now we put them all into one data frame for all RCP 8.5 projection data
+  
+  rcp85 = rcp85.pr
+  
+  rcp85$Daily_Max_Temp = rcp85.tx$Daily_Max_Temp
+  rcp85$Daily_Min_Temp = rcp85.tn$Daily_Min_Temp
+
+  # And Clean the Mess
+
+  remove(rcp85.pr)
+  remove(rcp85.tx)
+  remove(rcp85.tn)
+
+```
+
+```{r}
+save(dataset_name,
+     target_name,
+     target_abbr,
+     target_lon,
+     target_lat,
+     historical,
+     rcp45,
+     rcp85,
+     file = paste("LOCA_2_",
+                  target_abbr,
+                  ".Rdata",
+                  sep = ""))
+
+```
+
+
+## 5d. Concatenate (bind) ALL of the cases into a single dataframe
+
+```{r}
+
+ # to merge we use the rbind() function
+
+loca = rbind(historical,
+             rcp45,
+             rcp85)
+
+remove(historical)
+remove(rcp45)
+remove(rcp85)
+
+```
+
+## 5e. Save File For Now
+
+```{r}
+
+save(dataset_name,
+     target_name,
+     target_abbr,
+     target_lon,
+     target_lat,
+     loca, 
+     file = paste("LOCA_",
+                  target_abbr,
+                  ".Rdata",
+                  sep = ""))
+
+```

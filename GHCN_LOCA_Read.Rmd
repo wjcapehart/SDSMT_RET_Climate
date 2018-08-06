@@ -1,0 +1,1422 @@
+---
+title: "Climate Model vs Station Observation Comparisons"
+output: html_notebook
+---
+
+This script processes annual LOCA and GHCN temperature and rainfall.
+
+The climate model output comes from the USGS [LOCA](http://loca.ucsd.edu) Downscaled Analyses from the CMIP5 climate model runs from 27 models.  (There were a total of 32 models used for these analyses but we are only using the model runs that include maximum/miniumum temperature, and precipitation.)
+
+**Table for Available LOCA CMIP5 Point Stations**
+
+CMIP5 Models        | CMIP5 Models          | CMIP5 Models
+--------------------|-----------------------|---------------------
+ACCESS1.0_r1i1p1    | ACCESS1.3_r1i1p1      | CCSM4_r6i1p1         
+CESM1.BGC_r1i1p1    | CESM1.CAM5_r1i1p1     | CMCC.CMS_r1i1p1      
+CMCC.CM_r1i1p1      | CNRM.CM5_r1i1p1       | CSIRO.Mk3.6.0_r1i1p1 
+CanESM2_r1i1p1      | FGOALS.g2_r1i1p1      | GFDL.CM3_r1i1p1      
+GFDL.ESM2G_r1i1p1   | GFDL.ESM2M_r1i1p1     | HadGEM2.AO_r1i1p1    
+HadGEM2.CC_r1i1p1   | HadGEM2.ES_r1i1p1     | IPSL.CM5A.LR_r1i1p1  
+IPSL.CM5A.MR_r1i1p1 | MIROC.ESM.CHEM_r1i1p1 | MIROC.ESM_r1i1p1     
+MIROC5_r1i1p1       | MPI.ESM.LR_r1i1p1     | MPI.ESM.MR_r1i1p1    
+MRI.CGCM3_r1i1p1    | NorESM1.M_r1i1p1      | bcc.csm1.1.m_r1i1p1
+
+The result is an *ensemble* of 27 independant virtual earths for our simulation period from 1950 to 2099.
+
+The simulations further diverge at 2006 where our model runs separate into two scenarios.
+
+* **RCP 4.5**: A simulation targeting a total amount of 4.5 W m^2^ addition greenhouse forcing 
+* **RCP 8.5**: A simulation targeting a total amount of 8.5 W m^2^ addition greenhouse forcing 
+
+Together, we use these two future cases to reprsent upper and lower bounds of likely expected future climates depending on current and projected greenhouse gas emissions. (The "RPC" stands for ["Representative Pathway Concentration"](https://link.springer.com/article/10.1007/s10584-011-0148-z))
+
+
+
+```{r}
+
+# R Libraries
+
+  library(ncdf4)
+  library(ncdf4.helpers)
+  library(PCICt)
+  library(lubridate)
+  library(ggplot2)
+  library(quantreg)
+  library(climdex.pcic)
+  library(seas)
+  library(dplyr)
+  library(ClimClass)
+  library(geosphere)
+
+```
+
+For this worksheet, we have taken the larger US LOCA model outputs and have extracted time series from select stations in South Dakota.  
+
+**Table for Available LOCA CMIP5 Point Stations**
+
+Name            | ICAO Code for LOCA Data   | GHCN Station Recommended Match
+----------------|---------------------------|----------------------------------------------------
+Sioux Falls, SD | KFSD                      | GHCND-USW00014944__SIOUX_FALLS_FOSS_FIELD_SD
+Aberdeen, SD    | KABR                      | GHCND-USW00014929__ABERDEEN_REGIONAL_AIRPORT_SD
+Huron, SD       | KHON                      | GHCND-USW00014936__HURON_REGIONAL_AIRPORT_SD
+Pierre, SD      | KPIR                      | GHCND-USW00024025__PIERRE_REGIONAL_AIRPORT_SD
+Vermillion, SD  | KVMR                      | GHCND-USC00398622__VERMILLION_2_SE_SD
+Faith, SD       | KD07                      | GHCND-USC00392852__FAITH_SD
+Pine Ridge, SD  | KIEN                      | GHCND-USC00396612__PINE_RIDGE_SD
+Mobridge, SD    | KMBG                      | GHCND-USW00094052__MOBRIDGE_MUNICIPAL_AIRPORT_SD
+Winner, SD      | KICR                      | GHCND-USC00399367__WINNER_SD
+Mitchell, SD    | KHME                      | GHCND-USC00395671__MITCHELL_2_N_SD
+Custer, SD      | KCUT                      | GHCND-USC00392087__CUSTER_SD
+Spearfish, SD   | KSPF                      | GHCND-USC00397882__SPEARFISH_SD
+Watertown, SD   | KATY                      | GHCND-USW00014946__WATERTOWN_REGIONAL_AIRPORT_SD
+Sisseton, SD    | K8D3                      | GHCND-USC00397742__SISSETON_SD
+Buffalo, SD     | K9D2                      | GHCND-USC00391114__BUFFALO_SD
+Bison, SD       | K6V5                      | GHCND-USC00390701__BISON_SD
+Lemmon, SD      | KLEM                      | GHCND-USC00394864__LEMMON_SD
+Rapid City, SD  | KRAP                      | GHCND-USW00024090__RAPID_CITY_REGIONAL_AIRPORT_SD
+Brookings, SD   | KBKX                      | GHCND-USC00391076__BROOKINGS_2_NE_SD
+Phillip, SD     | KPHP                      | GHCND-USW00024024__PHILIP_AIRPORT_SD
+Tyndall, SD     | SD61                      | GHCND-USC00398472__TYNDALL_SD
+Yankton, SD     | KYKN                      | GHCND-USW00094911__YANKTON_SD
+
+
+The LOCA data is archived by the point's 4-letter International Civil Aviation Organization (ICAO) [station codes](https://en.wikipedia.org/wiki/ICAO_airport_code) for the nearest airfield.
+
+Observation data is taken from [Global Historical Climatology Network (GHCN)](https://www.ncdc.noaa.gov/data-access/land-based-station-data/land-based-datasets/global-historical-climatology-network-ghcn)
+
+
+```{r}
+
+  ## selected ICAO station code goes below
+
+  station_abbreviation = "KHON"
+
+  ## selected GHCN station identifier goes here
+
+  GHCN_file_name = "GHCND-USW00014936__HURON_REGIONAL_AIRPORT_SD"
+  
+  ## Manually Enter User-Prefered Station Name
+  
+  station_name = "Huron, SD"
+  ghcn_station = "Huron, SD"
+
+
+```
+
+
+Climate Scenarios are not designed to determine "how many inches of partly sunny you'll need to shovel off your doorstep on 15 January 2052".  Rather they are a collection of statistics, such as the average and standard deviation (the spread).  
+
+Typically we use a period of about 30 years to extract it.  
+
+For some of the statitics we will explore later, in this example, we'll use a baseline period (historical period) of 1961-1990. This particular period has been used since early climate assessments and we retain its use for continuity.
+
+The projection (forecast) period can be selected for any period.
+
+
+
+
+```{r}
+
+ # Selecting two 30-year periods to compare
+
+ # historical (baseline) period
+
+ period_length       = 30
+
+ period_1_start_year = 1961
+ period_1_end_year   = period_1_start_year + period_length - 1
+ 
+ # projection period
+
+ period_2_start_year = 2031
+ period_2_end_year   = period_2_start_year + period_length - 1
+ 
+```
+
+
+We keep our climate data on a server at SD Mines.  This data is available [online](http://kyrill.ias.sdsmt.edu:8080/thredds) and can be accessed by software designed to read weather and cliamte data. 
+
+
+
+We are extracting data for daily, monthly and annual fields
+
+
+```{r}
+
+  # Cracking Open the LOCA Point Data Rdata Files (Monthly)
+
+
+  date_interval_lab = "Monthly"
+  
+  date_interval_files = toupper(date_interval_lab)
+
+
+  URL_LOCA_Directory = "http://kyrill.ias.sdsmt.edu:8080/thredds/fileServer/LOCA_POINT/"
+  
+  URL_LOCA_File = paste(URL_LOCA_Directory,
+                       "LOCA_", 
+                       date_interval_files, 
+                       "_",
+                       station_abbreviation,
+                       ".Rdata",
+                       sep = "")
+  
+
+  load( file = url(description = URL_LOCA_File) )
+  
+  colnames(loca_all)[ 8] = "Min_Temperature"
+  colnames(loca_all)[ 9] = "Max_Temperature"
+  colnames(loca_all)[10] = "Avg_Temperature"
+  colnames(loca_all)[11] = "Total_Precip"
+  
+  loca_mon = loca_all
+  
+  loca_mon$Ensemble = as.character(loca_mon$Ensemble)
+  loca_mon$Scenario = as.character(loca_mon$Scenario)
+  
+  ####################
+  
+  loca_annual_time = aggregate(formula = Time ~ year(Time) + Ensemble + Scenario, 
+                                         data    = loca_mon, 
+                                         FUN     = mean)  
+
+  
+  date_string = paste(year(loca_annual_time$Time),
+                      "-01-01 12:00:00 UTC",
+                      sep="")
+
+
+  loca_year = data.frame(Time     = as.POSIXct(date_string),
+                         Ensemble = loca_annual_time$Ensemble,
+                         Scenario = loca_annual_time$Scenario)
+  
+  loca_year$Ensemble = as.character(loca_year$Ensemble)
+  loca_year$Scenario = as.character(loca_year$Scenario)
+  
+  loca_year$Min_Temperature = aggregate(formula   = Min_Temperature ~ year(Time) + Ensemble + Scenario,
+                                        data      = loca_mon, 
+                                        FUN       = mean,
+                                        na.action = na.pass)
+
+  loca_year$Min_Temperature = loca_year$Min_Temperature$Min_Temperature
+    
+  loca_year$Max_Temperature = aggregate(formula   = Max_Temperature ~ year(Time) + Ensemble + Scenario,
+                                       data      = loca_mon, 
+                                       FUN       = mean,
+                                       na.action = na.pass)
+
+  loca_year$Max_Temperature = loca_year$Max_Temperature$Max_Temperature
+
+  loca_year$Avg_Temperature = aggregate(formula   = Avg_Temperature ~ year(Time) + Ensemble + Scenario,
+                                       data      = loca_mon, 
+                                       FUN       = mean,
+                                       na.action = na.pass)  
+  
+  loca_year$Avg_Temperature = loca_year$Avg_Temperature$Avg_Temperature
+
+  loca_year$Total_Precip    = aggregate(formula   = Total_Precip ~ year(Time) + Ensemble + Scenario,
+                                       data      = loca_mon, 
+                                       FUN       = sum,
+                                       na.action = na.pass)  
+  
+  loca_year$Total_Precip    = loca_year$Total_Precip$Total_Precip
+  
+
+  
+  
+  loca_year$Station    = as.character(loca_mon[1,]$Station)
+  loca_year$Elevation  = as.numeric(loca_mon[1,]$Elevation)  
+  loca_year$Latitude   = as.numeric(loca_mon[1,]$Latitude)  
+  loca_year$Longitude  = as.numeric(loca_mon[1,]$Longitude)  
+  
+  loca_year = loca_year[ ,colnames(loca_mon)]
+  
+  
+  ####################
+  
+  remove(loca_all)
+  remove(URL_LOCA_Directory)
+  remove(URL_LOCA_File)
+  remove(date_interval_files)
+  remove(loca_annual_time)
+  remove(date_string)
+  
+
+```
+
+
+```{r}
+
+  # Cracking Open the LOCA Point Data Rdata Files (Daily)
+
+
+  date_interval_lab = "Daily"
+  
+  date_interval_files = toupper(date_interval_lab)
+
+
+  URL_LOCA_Directory = "http://kyrill.ias.sdsmt.edu:8080/thredds/fileServer/LOCA_POINT/"
+  
+  URL_LOCA_File = paste(URL_LOCA_Directory,
+                       "LOCA_", 
+                       date_interval_files, 
+                       "_",
+                       station_abbreviation,
+                       ".Rdata",
+                       sep = "")
+  
+
+  load( file = url(description = URL_LOCA_File) )
+  
+  colnames(loca_all)[ 8] = "Min_Temperature"
+  colnames(loca_all)[ 9] = "Max_Temperature"
+  colnames(loca_all)[10] = "Avg_Temperature"
+  colnames(loca_all)[11] = "Total_Precip"
+  
+  loca_daily = loca_all
+  
+  loca_daily$Ensemble = as.character(loca_daily$Ensemble)
+  loca_daily$Scenario = as.character(loca_daily$Scenario)
+  
+  Scenario = unique(as.character(loca_daily$Scenario))
+    Ensemble = unique(as.character(loca_daily$Ensemble))
+
+  ####################
+  
+  remove(loca_all)
+  remove(URL_LOCA_Directory)
+  remove(URL_LOCA_File)
+  remove(date_interval_files)
+
+
+```
+
+
+The GHCN data can also be searched at the following website using either names or 
+searchable map [Here](http://kyrill.ias.sdsmt.edu:8080/repository/entry/show?entryid=ef83a85b-cf31-4274-821f-02761953a3cf).
+
+omit the .nc from the *GHCN_file_name* variable
+
+
+```{r}
+
+  # Cracking Open the GHCN Point Data Files
+  
+  GHCN_Base_URL = "http://kyrill.ias.sdsmt.edu:8080/thredds/dodsC/GHCN_POINT_DATA/"
+  
+  
+  GHCN_URL = paste(GHCN_Base_URL,
+                   GHCN_file_name,
+                   ".nc",
+                   sep = "")
+  
+  nc_ghcn = nc_open(filename=GHCN_URL)
+  
+  nc_ghcn_variables = nc.get.variable.list(f         = nc_ghcn, 
+                                           min.dims =        1)
+  
+  
+  ghcn_time = as.POSIXct(x  = nc.get.time.series(f = nc_ghcn,
+                                                 v = "maximum_air_temperature"),
+                         tz = "UTC")
+  
+  ghcn_maximum_air_temperature = ncvar_get(nc    =  nc_ghcn, 
+                                           varid = "maximum_air_temperature")
+  
+  ghcn_minimum_air_temperature = ncvar_get(nc    =  nc_ghcn, 
+                                           varid = "minimum_air_temperature")
+
+  if (any(nc_ghcn_variables == "mean_air_temperature" )) {  
+    ghcn_mean_air_temperature    = ncvar_get(nc    =  nc_ghcn, 
+                                             varid = "mean_air_temperature")
+  } else {
+    ghcn_mean_air_temperature   = ghcn_minimum_air_temperature
+    ghcn_mean_air_temperature[] = NA
+  }
+  
+  ghcn_precipitation_amount    = ncvar_get(nc    =  nc_ghcn, 
+                                           varid = "precipitation_amount")
+  
+  ghcn_station_name            = ncvar_get(nc    =  nc_ghcn, 
+                                           varid = "station_name")
+  
+  ghcn_latitude                = ncvar_get(nc    =  nc_ghcn, 
+                                           varid = "latitude")  
+
+  ghcn_longitude               = ncvar_get(nc    =  nc_ghcn, 
+                                           varid = "longitude")  
+
+  ghcn_altitude                = ncvar_get(nc    =  nc_ghcn, 
+                                           varid = "altitude")      
+    
+  nc_close(nc_ghcn)
+  
+  remove(GHCN_Base_URL)
+  remove(GHCN_file_name)
+  remove(GHCN_URL)
+  remove(nc_ghcn)
+  
+  ghcn_daily = data.frame(Time            = ghcn_time,
+                          Max_Temperature = ghcn_maximum_air_temperature,
+                          Min_Temperature = ghcn_minimum_air_temperature,
+                          Avg_Temperature = ghcn_mean_air_temperature,
+                          Total_Precip    = ghcn_precipitation_amount,
+                          Year            = year(ghcn_time),
+                          Month           = month(ghcn_time))
+  
+  ghcn_daily = subset(ghcn_daily[ (ghcn_daily$Year > 1949), ])
+
+  ghcn_daily[is.na(ghcn_daily$Avg_Temperature),]$Avg_Temperature = 
+             (ghcn_daily[is.na(ghcn_daily$Avg_Temperature),]$Max_Temperature  + 
+              ghcn_daily[is.na(ghcn_daily$Avg_Temperature),]$Min_Temperature) /2
+
+  ghcn_daily[is.na(ghcn_daily$Max_Temperature),]$Avg_Temperature <- NA
+  ghcn_daily[is.na(ghcn_daily$Min_Temperature),]$Avg_Temperature <- NA
+  
+  ## Aggregate (aveage and sum) daily obsrvations to both monthly and annual periods
+
+  ghcn_monthly_time = aggregate(formula = Time ~ Month + Year , 
+                                          data    = ghcn_daily, 
+                                          FUN     = mean)  
+
+  
+  date_string = paste(ghcn_monthly_time$Year,
+                      "-",
+                      sprintf("%0.2i", ghcn_monthly_time$Month) ,
+                      "-01 12:00:00 UTC",
+                      sep="")
+
+
+  ghcn_mon = data.frame(Time = as.POSIXct(date_string) )
+  
+
+
+
+  
+  ghcn_mon$Min_Temperature = aggregate(formula   = Min_Temperature ~ Month + Year, 
+                                       data      = ghcn_daily, 
+                                       FUN       = mean,
+                                       na.action = na.pass)
+
+  ghcn_mon$Min_Temperature = ghcn_mon$Min_Temperature$Min_Temperature
+    
+  ghcn_mon$Max_Temperature = aggregate(formula   = Max_Temperature ~ Month + Year, 
+                                       data      = ghcn_daily, 
+                                       FUN       = mean,
+                                       na.action = na.pass)
+
+  ghcn_mon$Max_Temperature = ghcn_mon$Max_Temperature$Max_Temperature
+
+  ghcn_mon$Avg_Temperature = aggregate(formula   = Avg_Temperature ~ Month + Year, 
+                                       data      = ghcn_daily, 
+                                       FUN       = mean,
+                                       na.action = na.pass)  
+  
+  ghcn_mon$Avg_Temperature = ghcn_mon$Avg_Temperature$Avg_Temperature
+
+  ghcn_mon$Total_Precip    = aggregate(formula   = Total_Precip ~ Month + Year, 
+                                       data      = ghcn_daily, 
+                                       FUN       = sum,
+                                       na.action = na.pass)  
+  
+  ghcn_mon$Total_Precip    = ghcn_mon$Total_Precip$Total_Precip
+  
+  ghcn_mon$Station    = ghcn_station_name
+  ghcn_mon$Elevation  = ghcn_altitude
+  ghcn_mon$Latitude   = ghcn_latitude
+  ghcn_mon$Longitude  = ghcn_longitude
+  ghcn_mon$Ensemble   = "GHCN Network"
+  ghcn_mon$Scenario   = "Observations"
+  
+  ghcn_mon = ghcn_mon[,colnames(loca_mon)]
+
+
+
+
+  ###################################
+  ## Aggregate (aveage and sum) daily obsrvations to both monthly and annual periods
+
+  ghcn_annual_time = aggregate(formula = Time ~ Year, 
+                                         data    = ghcn_daily, 
+                                         FUN     = mean)  
+
+  
+  date_string = paste(ghcn_annual_time$Year,
+                      "-01-01 12:00:00 UTC",
+                      sep="")
+
+
+  ghcn_year = data.frame(Time = as.POSIXct(date_string) )  
+  
+  
+  ghcn_year$Min_Temperature = aggregate(formula   = Min_Temperature ~ Year,
+                                        data      = ghcn_daily, 
+                                        FUN       = mean,
+                                        na.action = na.pass)
+
+  ghcn_year$Min_Temperature = ghcn_year$Min_Temperature$Min_Temperature
+    
+  ghcn_year$Max_Temperature = aggregate(formula   = Max_Temperature ~ Year,
+                                       data      = ghcn_daily, 
+                                       FUN       = mean,
+                                       na.action = na.pass)
+
+  ghcn_year$Max_Temperature = ghcn_year$Max_Temperature$Max_Temperature
+
+  ghcn_year$Avg_Temperature = aggregate(formula   = Avg_Temperature ~ Year,
+                                       data      = ghcn_daily, 
+                                       FUN       = mean,
+                                       na.action = na.pass)  
+  
+  ghcn_year$Avg_Temperature = ghcn_year$Avg_Temperature$Avg_Temperature
+
+  ghcn_year$Total_Precip    = aggregate(formula   = Total_Precip ~ Year,
+                                       data      = ghcn_daily, 
+                                       FUN       = sum,
+                                       na.action = na.pass)  
+  
+  ghcn_year$Total_Precip    = ghcn_year$Total_Precip$Total_Precip
+  
+  ghcn_year$Station    = ghcn_station_name
+  ghcn_year$Elevation  = ghcn_altitude
+  ghcn_year$Latitude   = ghcn_latitude
+  ghcn_year$Longitude  = ghcn_longitude
+  ghcn_year$Ensemble   = "GHCN Network"
+  ghcn_year$Scenario   = "Observations"
+  
+  if (month(max(ghcn_mon$Time)) != 12) {
+     ghcn_year[ year(ghcn_year$Time)   ==  year(max(ghcn_mon$Time))   ,]$Total_Precip    = NA
+     ghcn_year[ year(ghcn_year$Time)   ==  year(max(ghcn_mon$Time))   ,]$Min_Temperature = NA
+     ghcn_year[ year(ghcn_year$Time)   ==  year(max(ghcn_mon$Time))   ,]$Max_Temperature = NA
+     ghcn_year[ year(ghcn_year$Time)   ==  year(max(ghcn_mon$Time))   ,]$Avg_Temperature = NA
+  }
+  ghcn_year = ghcn_year[,colnames(loca_mon)]
+  
+
+  ghcn_daily$Station    = ghcn_station_name
+  ghcn_daily$Elevation  = ghcn_altitude
+  ghcn_daily$Latitude   = ghcn_latitude
+  ghcn_daily$Longitude  = ghcn_longitude
+  ghcn_daily$Ensemble   = "GHCN Network"
+  ghcn_daily$Scenario   = "Observations"
+  
+  ghcn_daily = ghcn_daily[,colnames(loca_mon)]
+  
+  ###################################
+  
+  
+
+  remove(date_string)
+  remove(ghcn_time)
+  remove(ghcn_monthly_time)
+  remove(ghcn_annual_time)
+  remove(ghcn_maximum_air_temperature)
+  remove(ghcn_minimum_air_temperature)
+  remove(ghcn_mean_air_temperature)
+  remove(ghcn_precipitation_amount)
+  remove(ghcn_altitude)
+  remove(ghcn_latitude)
+  remove(ghcn_longitude)
+
+  
+
+```
+
+```{r}
+
+# Merge both the observations and model output
+
+all_daily = rbind(ghcn_daily,  loca_daily)
+all_month = rbind(  ghcn_mon,    loca_mon)
+all_year  = rbind( ghcn_year,   loca_year)
+
+
+
+
+all_year_scenario_factor = factor(x      = all_year$Scenario)
+
+all_year_scenario_factor = factor(x      = all_year_scenario_factor,
+                                  levels = levels(all_year_scenario_factor)[c(2, 3, 1)])
+
+all_year$Scenario = all_year_scenario_factor
+
+
+
+
+
+all_month_scenario_factor = factor(x      = all_month$Scenario)
+
+all_month_scenario_factor = factor(x      = all_month_scenario_factor,
+                                  levels = levels(all_month_scenario_factor)[c(2, 3, 1)])
+
+all_month$Scenario = all_month_scenario_factor
+
+
+
+
+
+all_daily_scenario_factor = factor(x      = all_daily$Scenario)
+
+all_daily_scenario_factor = factor(x      = all_daily_scenario_factor,
+                                   levels = levels(x = all_daily_scenario_factor)[c(2, 3, 1)])
+
+all_daily$Scenario = all_daily_scenario_factor
+
+###################
+
+all_year$Case = as.character(NA)
+
+all_year[((all_year$Scenario == "Observations") & 
+         ((year(all_year$Time) >= period_1_start_year) & 
+          (year(all_year$Time) <= period_1_end_year))),]$Case = paste(period_1_start_year,
+                                                                       "-",
+                                                                       period_1_end_year,
+                                                                       " GHCN",
+                                                                       sep = "") 
+
+all_year[((all_year$Scenario != "Observations") & 
+         ((year(all_year$Time) >= period_1_start_year) & 
+          (year(all_year$Time) <= period_1_end_year))),]$Case = paste(period_1_start_year,
+                                                                       "-",
+                                                                       period_1_end_year,
+                                                                       " LOCA",
+                                                                       sep = "") 
+
+all_year[((all_year$Scenario == "RCP 4.5") & 
+         ((year(all_year$Time) >= period_2_start_year) & 
+          (year(all_year$Time) <= period_2_end_year))),]$Case = paste(period_2_start_year,
+                                                                      "-",
+                                                                      period_2_end_year,
+                                                                      " RCP 4.5",
+                                                                      sep = "")
+
+all_year[((all_year$Scenario == "RCP 8.5") & 
+         ((year(all_year$Time) >= period_2_start_year) & 
+          (year(all_year$Time) <= period_2_end_year))),]$Case = paste(period_2_start_year,
+                                                                      "-",
+                                                                      period_2_end_year,
+                                                                      " RCP 8.5",
+                                                                      sep = "")
+
+###################
+
+all_month$Case = as.character(NA)
+
+all_month[((all_month$Scenario == "Observations") & 
+         ((year(all_month$Time) >= period_1_start_year) & 
+          (year(all_month$Time) <= period_1_end_year))),]$Case = paste(period_1_start_year,
+                                                                       "-",
+                                                                       period_1_end_year,
+                                                                       " GHCN",
+                                                                       sep = "") 
+
+all_month[((all_month$Scenario != "Observations") & 
+         ((year(all_month$Time) >= period_1_start_year) & 
+          (year(all_month$Time) <= period_1_end_year))),]$Case = paste(period_1_start_year,
+                                                                       "-",
+                                                                       period_1_end_year,
+                                                                       " LOCA",
+                                                                       sep = "") 
+
+all_month[((all_month$Scenario == "RCP 4.5") & 
+         ((year(all_month$Time) >= period_2_start_year) & 
+          (year(all_month$Time) <= period_2_end_year))),]$Case = paste(period_2_start_year,
+                                                                      "-",
+                                                                      period_2_end_year,
+                                                                      " RCP 4.5",
+                                                                      sep = "")
+
+all_month[((all_month$Scenario == "RCP 8.5") & 
+         ((year(all_month$Time) >= period_2_start_year) & 
+          (year(all_month$Time) <= period_2_end_year))),]$Case = paste(period_2_start_year,
+                                                                      "-",
+                                                                      period_2_end_year,
+                                                                      " RCP 8.5",
+                                                                      sep = "")
+
+
+###################
+
+all_daily$Case = as.character(NA)
+
+all_daily[((all_daily$Scenario == "Observations") & 
+         ((year(all_daily$Time) >= period_1_start_year) & 
+          (year(all_daily$Time) <= period_1_end_year))),]$Case = paste(period_1_start_year,
+                                                                       "-",
+                                                                       period_1_end_year,
+                                                                       " GHCN",
+                                                                       sep = "") 
+
+all_daily[((all_daily$Scenario != "Observations") & 
+         ((year(all_daily$Time) >= period_1_start_year) & 
+          (year(all_daily$Time) <= period_1_end_year))),]$Case = paste(period_1_start_year,
+                                                                       "-",
+                                                                       period_1_end_year,
+                                                                       " LOCA",
+                                                                       sep = "") 
+
+all_daily[((all_daily$Scenario == "RCP 4.5") & 
+         ((year(all_daily$Time) >= period_2_start_year) & 
+          (year(all_daily$Time) <= period_2_end_year))),]$Case = paste(period_2_start_year,
+                                                                      "-",
+                                                                      period_2_end_year,
+                                                                      " RCP 4.5",
+                                                                      sep = "")
+
+all_daily[((all_daily$Scenario == "RCP 8.5") & 
+         ((year(all_daily$Time) >= period_2_start_year) & 
+          (year(all_daily$Time) <= period_2_end_year))),]$Case = paste(period_2_start_year,
+                                                                      "-",
+                                                                      period_2_end_year,
+                                                                      " RCP 8.5",
+                                                                      sep = "")
+
+all_year_case_factor = factor(x      = all_year$Case)
+
+all_year_case_factor = factor(x      = all_year_case_factor,
+                                  levels = levels(all_year_case_factor)[c(2, 3, 4, 1)])
+
+all_year$Case = all_year_case_factor
+
+
+all_mon_case_factor = factor(x      = all_month$Case)
+
+all_mon_case_factor = factor(x      = all_mon_case_factor,
+                                  levels = levels(all_mon_case_factor)[c(2, 3, 4, 1)])
+
+all_month$Case = all_mon_case_factor
+
+
+all_daily_case_factor = factor(x      = all_daily$Case)
+
+all_daily_case_factor = factor(x      = all_daily_case_factor,
+                                  levels = levels(all_daily_case_factor)[c(2, 3, 4, 1)])
+
+all_daily$Case = all_daily_case_factor
+
+
+
+##########
+all_year$Alpha  = 0
+all_year[ (all_year$Ensemble=="GHCN Network"), ]$Alpha  = 1
+
+all_month$Alpha = 0
+all_month[(all_month$Ensemble=="GHCN Network"), ]$Alpha  = 1
+
+all_daily$Alpha = 0
+all_daily[(all_daily$Ensemble=="GHCN Network"), ]$Alpha  = 1
+
+remove(all_year_scenario_factor)
+remove(all_daily_scenario_factor)
+remove(all_month_scenario_factor)
+
+```
+
+
+
+```{r}
+
+  
+# Processing ETCCDMI Indicies and other metrics
+
+      
+  all_daily$date = all_daily$Time
+
+      ############ Obs #############
+
+      ensemble  = "GHCN Network"
+      scenario  = "Observations"
+
+      mysubset = subset(all_daily, Scenario==scenario)
+
+      Time_PCICt = as.PCICt(mysubset$Time, cal="gregorian")
+      
+
+      
+        #### Process ETCCMI Indicies
+  
+        ETCCDMI_stat_gh = climdexInput.raw(tmax = mysubset$Max_Temperature, 
+                                           tmin = mysubset$Min_Temperature, 
+                                           prec = mysubset$Total_Precip, 
+                                           tmax.dates = Time_PCICt, 
+                                           tmin.dates = Time_PCICt, 
+                                           prec.dates = Time_PCICt, 
+                                           base.range = c(1961, 1990), 
+                                           n = 5, 
+                                           northern.hemisphere = TRUE, 
+                                           tavg = mysubset$Avg_Temperature, 
+                                           tavg.dates = Time_PCICt, 
+                                           temp.qtiles = c(0.1, 0.9), 
+                                           prec.qtiles = c(0.95, 0.99), 
+                                           max.missing.days = c(annual = 15, 
+                                                                monthly = 3),
+                                           min.base.data.fraction.present = 0.1) 
+      
+        #### Process Wetting Rain Interval 
+      
+      
+        wetting_rain_interval_block = interarrival(x     = mysubset, 
+                                                   var   = "Total_Precip", 
+                                                   p.cut = (0.5 * 25.4) , 
+                                                   inv   = FALSE)
+      
+        wetting_rain_interval_block$Ensemble  = ensemble
+        wetting_rain_interval_block$Scenario  = scenario  
+        
+        attr(wetting_rain_interval_block, "name")       = NULL
+        attr(wetting_rain_interval_block, "year.range") = NULL
+        attr(wetting_rain_interval_block, "inv")        = NULL
+        attr(wetting_rain_interval_block, "p.cut")      = NULL
+
+        #### Clean 
+      
+        wetting_rain_interval = wetting_rain_interval_block
+
+        remove(mysubset)
+        remove(Time_PCICt)
+       
+        remove(wetting_rain_interval_block)
+     
+  #### RCP 4.5 and RCP 8.5 ###
+
+  for (ensemble in unique(loca_year$Ensemble) ) {
+  
+  
+      print(paste("Processing Ensembles for Specific Indicies ",ensemble))
+    
+      ############ 4.5 #############
+    
+      scenario = "RCP 4.5"
+    
+ 
+ 
+      mysubset = subset(all_daily, (Scenario==scenario) & 
+                                   (Ensemble==ensemble))
+      
+      
+      Time_PCICt = as.PCICt(mysubset$Time, cal="gregorian")
+      
+
+      
+        #### Process ETCCMI Indicies
+  
+        ETCCDMI_stat_45 = climdexInput.raw(tmax = mysubset$Max_Temperature, 
+                                           tmin = mysubset$Min_Temperature, 
+                                           prec = mysubset$Total_Precip, 
+                                           tmax.dates = Time_PCICt, 
+                                           tmin.dates = Time_PCICt, 
+                                           prec.dates = Time_PCICt, 
+                                           base.range = c(1961, 1990), 
+                                           n = 5, 
+                                           northern.hemisphere = TRUE, 
+                                           tavg = mysubset$Avg_Temperature, 
+                                           tavg.dates = Time_PCICt, 
+                                           temp.qtiles = c(0.1, 0.9), 
+                                           prec.qtiles = c(0.95, 0.99), 
+                                           max.missing.days = c(annual = 15, 
+                                                                monthly = 3),
+                                           min.base.data.fraction.present = 0.1) 
+      
+        #### Process Wetting Rain Interval 
+      
+      
+        wetting_rain_interval_block = interarrival(x     = mysubset, 
+                                                   var   = "Total_Precip", 
+                                                   p.cut = (0.5 * 25.4) , 
+                                                   inv   = FALSE)
+      
+        wetting_rain_interval_block$Ensemble  = ensemble
+        wetting_rain_interval_block$Scenario  = scenario  
+        
+        attr(wetting_rain_interval_block, "name")       = NULL
+        attr(wetting_rain_interval_block, "year.range") = NULL
+        attr(wetting_rain_interval_block, "inv")        = NULL
+        attr(wetting_rain_interval_block, "p.cut")      = NULL
+        
+        wetting_rain_interval = bind_rows(wetting_rain_interval,
+                                          wetting_rain_interval_block)
+        
+        remove(wetting_rain_interval_block)
+
+        #### Clean 
+      
+      
+      remove(mysubset)
+      remove(Time_PCICt)
+
+
+      
+      ############ 8.5 #############
+
+      scenario = "RCP 8.5"
+    
+ 
+      mysubset = subset(all_daily, (Scenario==scenario) & 
+                                   (Ensemble==ensemble))
+
+      Time_PCICt = as.PCICt(mysubset$Time, cal="gregorian")
+      
+
+      
+        #### Process ETCCMI Indicies
+  
+        ETCCDMI_stat_85 = climdexInput.raw(tmax = mysubset$Max_Temperature, 
+                                           tmin = mysubset$Min_Temperature, 
+                                           prec = mysubset$Total_Precip, 
+                                           tmax.dates = Time_PCICt, 
+                                           tmin.dates = Time_PCICt, 
+                                           prec.dates = Time_PCICt, 
+                                           base.range = c(1961, 1990), 
+                                           n = 5, 
+                                           northern.hemisphere = TRUE, 
+                                           tavg = mysubset$Avg_Temperature, 
+                                           tavg.dates = Time_PCICt, 
+                                           temp.qtiles = c(0.1, 0.9), 
+                                           prec.qtiles = c(0.95, 0.99), 
+                                           max.missing.days = c(annual = 15, 
+                                                                monthly = 3),
+                                           min.base.data.fraction.present = 0.1) 
+      
+        #### Process Wetting Rain Interval 
+      
+      
+        wetting_rain_interval_block = interarrival(x     = mysubset, 
+                                                   var   = "Total_Precip", 
+                                                   p.cut = (0.5 * 25.4) , 
+                                                   inv   = FALSE)
+      
+        wetting_rain_interval_block$Ensemble  = ensemble
+        wetting_rain_interval_block$Scenario  = scenario  
+        
+        attr(wetting_rain_interval_block, "name")       = NULL
+        attr(wetting_rain_interval_block, "year.range") = NULL
+        attr(wetting_rain_interval_block, "inv")        = NULL
+        attr(wetting_rain_interval_block, "p.cut")      = NULL
+        
+        wetting_rain_interval = bind_rows(wetting_rain_interval,
+                                          wetting_rain_interval_block)
+        
+        remove(wetting_rain_interval_block)
+
+        #### Clean 
+      
+      
+      remove(mysubset)
+      remove(Time_PCICt)
+ 
+    
+      
+      ##############################################
+    
+  }
+  
+  names(wetting_rain_interval)[2] = "Days_Between_Wetting_Rain"
+  names(wetting_rain_interval)[3] = "Consecutive_Days_of_Wetting_Rain"
+  
+  
+  all_daily = merge(x = all_daily, 
+        y = wetting_rain_interval,
+        by = c("date","Scenario","Ensemble"),
+        all.x = TRUE,
+        sort = TRUE)
+  remove(wetting_rain_interval)
+
+
+
+```
+
+If we look at the observed data and measured output plotted against time (shown here for both average annual temperature, precipitation), we can see that for most of our datasets, observations are contained inside of the envelope of the ensemble "members."
+
+Also notice that in our area, you can start to see the moderate future case (RCP 4.5) and the more extreme case (RCP 8.5), diverge with respect to temperature.  
+
+In the Great Plains, however, the variations in rainfall are less clear.  This is one of the concerns of climate change in this region.  We may break even (or be a *little* wetter), but the higher temperatures will create higher amounts of evaporation.  
+
+
+```{r}
+# some parts of ggplot2 have not been playing nice with alphas so I am trying to create some custom colours
+myalph = 0.4
+
+blue_trans   = rgb(red  =     0.0,
+                   blue =     1.0,
+                   green =    0.0,
+                   alpha =  myalph)
+
+green_trans = rgb(red  =     0.0,
+                  blue =     0.0,
+                  green =    1.0,
+                  alpha = myalph)
+
+
+red_trans   = rgb(red  =     1.0,
+                  blue =     0.0,
+                  green =    0.0,
+                  alpha = myalph)
+
+```
+
+```{r}
+
+ # Plot all the ensembles for one case
+
+
+ 
+  ggplot(data = all_year)  +
+    aes(x     = Time,
+        y     = Avg_Temperature, 
+        color = Scenario,
+        alpha = Alpha) +
+    geom_line() +
+    scale_alpha_continuous(range = c(0.3, 1.0),
+                           guide = FALSE)  + 
+    scale_color_manual(values = c("blue", "red", "black")) + 
+    theme_bw() + 
+    theme(plot.title = element_text(hjust = 0.5)) +
+    annotate("text", 
+             x=min(all_year$Time), 
+             y=Inf, 
+             label = paste("\n",
+                           "GHCN Station: ",
+                           ghcn_station_name,
+                           "\n",
+                           "LOCA Station: ",
+                           station_abbreviation,
+                           " (",
+                           loca_year[1,]$Station,
+                           ")",sep=""), 
+             size = 3,
+             hjust = 0, 
+             vjust = 1) +
+    labs(title = paste(loca_year[,]$Station,
+                       " ",
+                       min(year(loca_year$Time)),
+                       "-",
+                       max(year(loca_year$Time)),
+                       " CMIP5 LOCA vs Obs",
+                       sep = ""),
+         y     = paste('Mean Annual Temperature (°C)',
+                       sep = "") )
+    
+                    
+
+```
+
+
+```{r}
+
+ # Plot all the ensembles for one case
+
+
+ 
+  ggplot(data = all_year)  +
+    aes(x     = Time,
+        y     = Total_Precip, 
+        color = Scenario,
+        alpha = Alpha) +
+    geom_line() +
+    scale_alpha_continuous(range = c(0.3, 1.0),
+                           guide = FALSE)  + 
+    scale_color_manual(values = c("blue", "red", "black")) + 
+    theme_bw() + 
+    theme(plot.title = element_text(hjust = 0.5)) +
+    annotate("text", 
+             x=min(all_year$Time), 
+             y=Inf, 
+             label = paste("\n",
+                           "GHCN Station: ",
+                           ghcn_station_name,
+                           "\n",
+                           "LOCA Station: ",
+                           station_abbreviation,
+                           " (",
+                           loca_year[1,]$Station,
+                           ")",sep=""), 
+             size = 3,
+             hjust = 0, 
+             vjust = 1) +
+    labs(title = paste(loca_year[,]$Station,
+                       " ",
+                       min(year(loca_year$Time)),
+                       "-",
+                       max(year(loca_year$Time)),
+                       " CMIP5 LOCA vs Obs",
+                       sep = ""),
+         y     = paste('Total Annual Rainfall (mm)',
+                       sep = "") )
+    
+                    
+
+```
+
+
+
+Let's take a closer look at the precipitation and temprature rates of change over time...
+
+We can add a trend line to the data and model
+
+```{r}
+
+
+ 
+  ggplot(data = all_year)  +
+    aes(x     = Time,
+        y     = Avg_Temperature, 
+        color = Scenario,
+        alpha = Alpha) +
+      geom_line() +
+    geom_smooth(alpha  = 0.1, 
+                method = "loess") +
+    scale_alpha_continuous(range = c(0.3, 1.0),
+                           guide = FALSE)  + 
+    scale_color_manual(values = c("blue", "red", "black")) + 
+    scale_fill_manual( values = c("cyan", "magenta", "grey")) + 
+    theme_bw() + 
+    theme(plot.title = element_text(hjust = 0.5)) +
+    annotate("text", 
+             x=min(all_year$Time), 
+             y=Inf, 
+             label = paste("\n",
+                           "GHCN Station: ",
+                           ghcn_station_name,
+                           "\n",
+                           "LOCA Station: ",
+                           station_abbreviation,
+                           " (",
+                           loca_year[1,]$Station,
+                           ")",sep=""), 
+             size = 3,
+             hjust = 0, 
+             vjust = 1) +
+    labs(title = paste(loca_year[,]$Station,
+                       " ",
+                       min(year(loca_year$Time)),
+                       "-",
+                       max(year(loca_year$Time)),
+                       " CMIP5 LOCA vs Obs",
+                       sep = ""),
+         y     = paste('Mean Annual Temperature (°C)',
+                       sep = "") )
+    
+                    
+
+
+```
+
+```{r}
+
+
+ 
+  ggplot(data = all_year)  +
+    aes(x     = Time,
+        y     = Total_Precip, 
+        color = Scenario,
+        alpha = Alpha) +
+      geom_line() +
+    geom_smooth(alpha  = 0.1, 
+                method = "loess") +
+    scale_alpha_continuous(range = c(0.3, 1.0),
+                           guide = FALSE)  + 
+    scale_color_manual(values = c("blue", "red", "black")) + 
+    scale_fill_manual( values = c("cyan", "magenta", "grey")) + 
+    theme_bw() + 
+    theme(plot.title = element_text(hjust = 0.5)) +
+    annotate("text", 
+             x=min(all_year$Time), 
+             y=Inf, 
+             label = paste("\n",
+                           "GHCN Station: ",
+                           ghcn_station_name,
+                           "\n",
+                           "LOCA Station: ",
+                           station_abbreviation,
+                           " (",
+                           loca_year[1,]$Station,
+                           ")",sep=""), 
+             size = 3,
+             hjust = 0, 
+             vjust = 1) +
+    labs(title = paste(loca_year[,]$Station,
+                       " ",
+                       min(year(loca_year$Time)),
+                       "-",
+                       max(year(loca_year$Time)),
+                       " CMIP5 LOCA vs Obs",
+                       sep = ""),
+         y     = paste('Total Precipitation (mm)',
+                       sep = "") )
+    
+                    
+
+
+```
+
+```{r}
+
+ # Selecting two 30-year periods to compare
+
+
+
+ all_year_period_1   = subset(all_year,((year(Time) >= period_1_start_year) & 
+                                        (year(Time) <= period_1_end_year))   )
+ 
+ all_year_period_1$Period  = paste(period_1_start_year,
+                                   "-",
+                                   period_1_end_year,
+                                   sep = "") 
+
+
+ 
+
+ all_year_period_2   = subset(all_year,((year(Time) >= period_2_start_year) & 
+                                        (year(Time) <= period_2_end_year))   )
+ 
+ all_year_period_2$Period  = paste(period_2_start_year,
+                                   "-",
+                                   period_2_end_year,
+                                   sep = "")
+ 
+
+ 
+
+```
+
+
+
+```{r}
+
+ # Plot all the ensembles for one case
+
+  mysubset = subset(all_year_period_1, Scenario!="RCP 8.5")
+  
+  ggplot(data=mysubset)  +
+    
+    aes(x=Avg_Temperature, color=Ensemble) +
+    
+    geom_density() + 
+    
+    geom_density(data=mysubset, color="black") +
+    
+    theme_bw() + 
+    theme(plot.title = element_text(hjust = 0.5)) + 
+    labs(title = paste(loca_year[1,]$Station,
+                       " ",
+                       period_1_start_year,
+                       "-",
+                       period_1_end_year,
+                       " Historical",
+                       sep = ""),
+         x     = paste('Mean Annual Temperature (°C)',
+                       sep = "") )
+  
+```          
+
+```{r}
+
+ # Plot all the ensembles for one case
+
+  mysubset = subset(all_year_period_1, Scenario!="RCP 8.5")
+  
+  ggplot(data=mysubset)  +
+    
+    aes(x=Min_Temperature, color=Ensemble) +
+    
+    geom_density() + 
+    
+    geom_density(data=mysubset, color="black") +
+    
+    theme_bw() + 
+    theme(plot.title = element_text(hjust = 0.5)) + 
+    labs(title = paste(loca_year[1,]$Station,
+                       " ",
+                       period_1_start_year,
+                       "-",
+                       period_1_end_year,
+                       " Historical",
+                       sep = ""),
+         x     = paste('Minimum Annual Temperature (°C)',
+                       sep = "") )
+  
+```
+
+```{r}
+
+ # Plot all the ensembles for one case
+
+  mysubset = subset(all_year_period_1, Scenario!="RCP 8.5")
+  
+  ggplot(data=mysubset)  +
+    
+    aes(x=Max_Temperature, color=Ensemble) +
+    
+    geom_density() + 
+    
+    geom_density(data=mysubset, 
+                 color="black") +
+    
+    theme_bw() + 
+    theme(plot.title = element_text(hjust = 0.5)) + 
+    labs(title = paste(loca_year[1,]$Station,
+                       " ",
+                       period_1_start_year,
+                       "-",
+                       period_1_end_year,
+                       " Historical",
+                       sep = ""),
+         x     = paste('Maximum Annual Temperature (°C)',
+                       sep = "") )
+  
+```   
+
+```{r}
+
+ # Plot all the ensembles for one case
+
+  mysubset = subset(all_year_period_1, Scenario!="RCP 8.5")
+  
+  ggplot(data=mysubset)  +
+    
+    aes(x     = Total_Precip, 
+        color = Case,
+        line  = Ensemble) +
+    
+
+    geom_density() +
+    
+
+        scale_colour_manual(values=c(blue_trans,"black"))+
+
+ 
+    theme_bw() + 
+    theme(plot.title = element_text(hjust = 0.5)) + 
+    labs(title = paste(loca_year[1,]$Station,
+                       " ",
+                       period_1_start_year,
+                       "-",
+                       period_1_end_year,
+                       " Historical",
+                       sep = ""),
+         x     = paste('Total Annual Rainfall (mm)',
+                       sep = "") )
+  
+```      
+
+```{r}
+
+ # Plot all the ensembles for one case
+
+
+ggplot(data=subset(all_year,  !is.na(Case)   ))  +
+    
+    aes(x     = Total_Precip, 
+        color = Case,
+        line  = Ensemble) +
+    
+
+    geom_density() +
+    
+
+    scale_colour_manual(values=c(blue_trans,green_trans,red_trans,"black"))+
+
+ 
+    theme_bw() + 
+    theme(plot.title = element_text(hjust = 0.5)) + 
+    labs(title = paste(loca_year[1,]$Station,
+                       sep = ""),
+         x     = paste('Total Annual Rainfall (mm)',
+                       sep = "") )
+  
+```  
+
+
+```{r}
+
+ # Plot all the ensembles for one case
+
+
+ggplot(data=subset(all_year,  !is.na(Case)   ))  +
+    
+    aes(x     = Avg_Temperature, 
+        color = Case,
+        line  = Ensemble) +
+    
+
+    geom_density() +
+    
+
+    scale_colour_manual(values=c(blue_trans,
+                                 green_trans,
+                                 red_trans,
+                                 "black"))+
+
+ 
+    theme_bw() + 
+    theme(plot.title = element_text(hjust = 0.5)) + 
+    labs(title = paste(loca_year[1,]$Station,
+                       sep = ""),
+         x     = paste('Mean Annual Temperature (°C)',
+                       sep = "") )
+  
+```  
+
+
+```{r}
+
+
+ggplot(data=subset(all_daily,  !is.na(Case) & !is.na(Days_Between_Wetting_Rain)   ))  +
+    aes(x     = Days_Between_Wetting_Rain, 
+        color = Case, 
+        line  = Ensemble,
+        alpha = Alpha) +
+    theme_bw() + 
+    theme(plot.title = element_text(hjust = 0.5)) + 
+    geom_density(alpha = 0.2) + 
+    scale_alpha_continuous(range = c(0.1, 1.0),
+                           guide = FALSE)  + 
+  
+    scale_colour_manual(values=c(blue_trans,
+                                 green_trans,
+                                 red_trans,
+                                 "black"))+
+
+  
+
+    scale_x_continuous(limits = c(0,100)) + 
+    labs(title = paste(station_name,
+                       ",  ",
+                       "All LOCA Ensembles",
+                       sep = ""),
+         x     = paste('Days Between Precip Events > ½"',
+                       sep = ""))
+  
+
+
+```
+
+
+
+```{r}
+
+
+  ggplot(data=subset(all_daily,  !is.na(Case) & !is.na(Days_Between_Wetting_Rain)   ))  +
+    aes(x     = Days_Between_Wetting_Rain, 
+        color = Case, 
+        alpha = Alpha) +
+    theme_bw() + 
+    theme(plot.title = element_text(hjust = 0.5)) + 
+    geom_density() + 
+    scale_alpha_continuous(range = c(0.1, 1.0),
+                           guide = FALSE)  + 
+  
+    scale_colour_manual(values=c("blue","green","red","black"))+
+      scale_fill_manual(values=c("blue","green","red","black"))+
+
+    scale_x_continuous(limits = c(0,100)) + 
+    labs(title = paste(station_name,
+                       ",  ",
+                       "All LOCA Ensembles",
+                       sep = ""),
+         x     = paste('Days Between Precip Events > ½"',
+                       sep = ""))
+  
+
+```
+
