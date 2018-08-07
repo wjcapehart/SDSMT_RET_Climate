@@ -1,7 +1,9 @@
 ---
 title: "Climate Model vs Station Observation Comparisons"
-output: html_notebook
----
+output:
+  pdf_document: default
+  html_notebook: default
+--- 
 
 This script processes annual LOCA and GHCN temperature and rainfall.
 
@@ -38,6 +40,7 @@ Together, we use these two future cases to reprsent upper and lower bounds of li
 
   library(ncdf4)
   library(ncdf4.helpers)
+  library(reshape2)
   library(PCICt)
   library(lubridate)
   library(ggplot2)
@@ -701,15 +704,142 @@ all_year$Alpha  = 0
 all_year[ (all_year$Ensemble=="GHCN Network"), ]$Alpha  = 1
 
 all_month$Alpha = 0
-all_month[(all_month$Ensemble=="GHCN Network"), ]$Alpha  = 1
+all_month[(all_month$Ensemble=="GHCN Network"), ]$Alpha = 1
 
 all_daily$Alpha = 0
-all_daily[(all_daily$Ensemble=="GHCN Network"), ]$Alpha  = 1
+all_daily[(all_daily$Ensemble=="GHCN Network"), ]$Alpha = 1
 
 remove(all_year_scenario_factor)
 remove(all_daily_scenario_factor)
 remove(all_month_scenario_factor)
 
+
+```
+
+For our annual data we also can add data capturing upper and lower bounds using percentiles and related stats.
+
+This will declutter some of our graphs below.
+
+
+```{r}
+
+################### Statitics Across Ensembles by Time & Scenario ###############################
+
+  
+   #################### Means
+ 
+  avg.mean = aggregate(formula   = cbind(Min_Temperature, 
+                                         Avg_Temperature,
+                                         Max_Temperature,
+                                         Total_Precip) ~ Scenario + Time,
+                       data      = all_year,
+                       FUN       = mean,
+                       na.action = na.pass)
+  
+  avg.mean$Aggregate_Stat = "Mean"
+  
+    
+   #################### Stdev
+ 
+  sd.stdev = aggregate(formula   = cbind(Min_Temperature, 
+                                         Avg_Temperature,
+                                         Max_Temperature,
+                                         Total_Precip) ~ Scenario + Time,
+                       data      = loca_year,
+                       FUN       = sd,
+                       na.action = na.pass)
+  
+  sd.stdev$Aggregate_Stat = "StDev"
+  
+   #################### Q0
+
+  qtiles.q0 = aggregate(formula   = cbind(Min_Temperature, 
+                                         Avg_Temperature,
+                                         Max_Temperature,
+                                         Total_Precip) ~ Scenario + Time,
+                       data      = loca_year,
+                       FUN       = min,
+                       na.rm     = TRUE)
+  
+  qtiles.q0$Aggregate_Stat = "Q0"
+
+  qtiles.q1 = aggregate(formula   = cbind(Min_Temperature, 
+                                         Avg_Temperature,
+                                         Max_Temperature,
+                                         Total_Precip) ~ Scenario + Time,
+                       data      = loca_year,
+                       FUN       = quantile, probs = 0.25,
+                       na.rm     = TRUE)
+  
+  qtiles.q1$Aggregate_Stat = "Q1"  
+
+   #################### Q1
+  
+    
+  qtiles.q2 = aggregate(formula   = cbind(Min_Temperature, 
+                                         Avg_Temperature,
+                                         Max_Temperature,
+                                         Total_Precip) ~ Scenario + Time,
+                       data      = loca_year,
+                       FUN       = quantile, probs = 0.50,
+                       na.rm     = TRUE)
+  
+  qtiles.q2$Aggregate_Stat = "Q2" 
+
+   #################### Q3
+  
+    
+  qtiles.q3 = aggregate(formula   = cbind(Min_Temperature, 
+                                         Avg_Temperature,
+                                         Max_Temperature,
+                                         Total_Precip) ~ Scenario + Time,
+                        data      = loca_year,
+                        FUN       = quantile, probs = 0.75,
+                        na.rm     = TRUE)
+  
+  qtiles.q3$Aggregate_Stat = "Q3"  
+
+   #################### Q4
+
+  qtiles.q4 = aggregate(formula   = cbind(Min_Temperature, 
+                                         Avg_Temperature,
+                                         Max_Temperature,
+                                         Total_Precip) ~ Scenario + Time,
+                        data      = loca_year,
+                        FUN       = max,
+                        na.rm     = TRUE)
+  
+  qtiles.q4$Aggregate_Stat = "Q4"  
+   
+  #################### merge and clean
+  
+  all_year.stats = rbind(avg.mean,
+                         sd.stdev,
+                         qtiles.q0,
+                         qtiles.q1,
+                         qtiles.q2,
+                         qtiles.q3,
+                         qtiles.q4)
+
+
+  remove(avg.mean)
+  remove(sd.stdev)
+  remove(qtiles.q0)
+  remove(qtiles.q1)
+  remove(qtiles.q2)
+  remove(qtiles.q3)
+  remove(qtiles.q4)
+
+  all_year.stats$Station   = all_year$Station[1]
+  all_year.stats$Longitude = all_year$Longitude[1]
+  all_year.stats$Latitude  = all_year$Latitude[1]
+  all_year.stats$Elevation = all_year$Elevation[1]
+    
+
+  all_year.stats = all_year.stats[, c(8:11,2,1,7,3:6)]
+  
+  
+  
 ```
 
 
@@ -917,7 +1047,6 @@ remove(all_month_scenario_factor)
   all_daily = merge(x = all_daily, 
         y = wetting_rain_interval,
         by = c("date","Scenario","Ensemble"),
-        all.x = TRUE,
         sort = TRUE)
   remove(wetting_rain_interval)
 
@@ -952,23 +1081,92 @@ red_trans   = rgb(red  =     1.0,
                   green =    0.0,
                   alpha = myalph)
 
+myalph = 0.2
+
+blue_clear   = rgb(red  =     0.0,
+                   blue =     1.0,
+                   green =    0.0,
+                   alpha =  myalph)
+
+green_clear = rgb(red  =     0.0,
+                  blue =     0.0,
+                  green =    1.0,
+                  alpha = myalph)
+
+
+red_clear   = rgb(red  =     1.0,
+                  blue =     0.0,
+                  green =    0.0,
+                  alpha = myalph)
+
+
 ```
 
 ```{r}
 
- # Plot all the ensembles for one case
+# Plot all the ensembles envelopes.
+
+  # to start we need to take our "long" R format 
+  #  and for the variable we want to plot, we need
+  #  to put it into a 2-d wide format.
+
+  # in this case we want the various stats for our plotted 
+  #   value to go across the columns.
+
+  # first we isolate the values we want to retain for plotting
+
+  stat_table = subset(x      = all_year.stats,
+                      select = c(Time,
+                                 Scenario,
+                                 Aggregate_Stat,
+                                 Avg_Temperature))
+  
+  # then we "spread" our statistics column (Aggregate_Stat) across multiple
+  #  cols (one column for each unique stat in that column) (that's our *key*)
+  #  and distribute the contents of the *value* into the new "2-D" space
+
+  stat_table =  spread(data  = stat_table,       # data frame
+                       key   = Aggregate_Stat,   # column that will be "spread" by its unique values
+                       value = Avg_Temperature)  # the variable to be distributed over the x-y new space
 
 
- 
-  ggplot(data = all_year)  +
+  ggplot(data = stat_table)  +
     aes(x     = Time,
-        y     = Avg_Temperature, 
-        color = Scenario,
-        alpha = Alpha) +
-    geom_line() +
-    scale_alpha_continuous(range = c(0.3, 1.0),
-                           guide = FALSE)  + 
-    scale_color_manual(values = c("blue", "red", "black")) + 
+        y     = Mean, 
+        color =Scenario,
+        fill = Scenario) +
+    
+    theme_bw() + 
+    theme(plot.title = element_text(hjust = 0.5)) +    
+    
+    scale_color_manual(values = c("blue", 
+                                 "red", 
+                                 "black")) + 
+
+    
+    geom_ribbon(data    = stat_table,
+                mapping = aes(x     = Time,
+                              ymin  = Q0,
+                              ymax  = Q4,
+                              color = Scenario),
+                alpha   = 0.2,
+                colour  = NA) +
+    
+    geom_ribbon(data    = stat_table,
+                mapping = aes(x     = Time,
+                              ymin  = Q1,
+                              ymax  = Q3,
+                              color = Scenario),
+                alpha   = 0.2,
+                colour  = NA) +
+    
+    geom_line() + 
+
+    
+    scale_fill_manual(values = c("blue", 
+                                 "red", 
+                                 "black")) + 
+
     theme_bw() + 
     theme(plot.title = element_text(hjust = 0.5)) +
     annotate("text", 
@@ -997,25 +1195,76 @@ red_trans   = rgb(red  =     1.0,
                        sep = "") )
     
                     
+  remove(stat_table)
 
+  
 ```
 
 
 ```{r}
 
- # Plot all the ensembles for one case
+# Plot all the ensembles envelopes.
+
+  # to start we need to take our "long" R format 
+  #  and for the variable we want to plot, we need
+  #  to put it into a 2-d wide format.
+
+  # in this case we want the various stats for our plotted 
+  #   value to go across the columns.
+
+  # first we isolate the values we want to retain for plotting
+
+  stat_table = subset(x      = all_year.stats,
+                      select = c(Time,
+                                 Scenario,
+                                 Aggregate_Stat,
+                                 Total_Precip))
+  
+  # then we "spread" our statistics column (Aggregate_Stat) across multiple
+  #  cols (one column for each unique stat in that column) (that's our *key*)
+  #  and distribute the contents of the *value* into the new "2-D" space
+
+  stat_table =  spread(data  = stat_table,       # data frame
+                       key   = Aggregate_Stat,   # column that will be "spread" by its unique values
+                       value = Total_Precip)  # the variable to be distributed over the x-y new space
 
 
- 
-  ggplot(data = all_year)  +
+  ggplot(data = stat_table)  +
     aes(x     = Time,
-        y     = Total_Precip, 
+        y     = Mean, 
         color = Scenario,
-        alpha = Alpha) +
-    geom_line() +
-    scale_alpha_continuous(range = c(0.3, 1.0),
-                           guide = FALSE)  + 
-    scale_color_manual(values = c("blue", "red", "black")) + 
+        fill  = Scenario) +
+    
+    theme_bw() + 
+    theme(plot.title = element_text(hjust = 0.5)) +    
+    
+    scale_color_manual(values = c("blue", 
+                                 "red", 
+                                 "black")) + 
+
+    
+    geom_ribbon(data    = stat_table,
+                mapping = aes(x     = Time,
+                              ymin  = Q0,
+                              ymax  = Q4,
+                              color = Scenario),
+                alpha   = 0.2,
+                colour  = NA) +
+    
+    geom_ribbon(data    = stat_table,
+                mapping = aes(x     = Time,
+                              ymin  = Q1,
+                              ymax  = Q3,
+                              color = Scenario),
+                alpha   = 0.2,
+                colour  = NA) +
+    
+    geom_line() + 
+
+    scale_fill_manual(values = c("blue", 
+                                 "red", 
+                                 "black")) + 
+
     theme_bw() + 
     theme(plot.title = element_text(hjust = 0.5)) +
     annotate("text", 
@@ -1040,114 +1289,16 @@ red_trans   = rgb(red  =     1.0,
                        max(year(loca_year$Time)),
                        " CMIP5 LOCA vs Obs",
                        sep = ""),
-         y     = paste('Total Annual Rainfall (mm)',
+         y     = paste('Total Annual Precip (mm)',
                        sep = "") )
     
                     
-
+  remove(stat_table)
+  
 ```
 
 
 
-Let's take a closer look at the precipitation and temprature rates of change over time...
-
-We can add a trend line to the data and model
-
-```{r}
-
-
- 
-  ggplot(data = all_year)  +
-    aes(x     = Time,
-        y     = Avg_Temperature, 
-        color = Scenario,
-        alpha = Alpha) +
-      geom_line() +
-    geom_smooth(alpha  = 0.1, 
-                method = "loess") +
-    scale_alpha_continuous(range = c(0.3, 1.0),
-                           guide = FALSE)  + 
-    scale_color_manual(values = c("blue", "red", "black")) + 
-    scale_fill_manual( values = c("cyan", "magenta", "grey")) + 
-    theme_bw() + 
-    theme(plot.title = element_text(hjust = 0.5)) +
-    annotate("text", 
-             x=min(all_year$Time), 
-             y=Inf, 
-             label = paste("\n",
-                           "GHCN Station: ",
-                           ghcn_station_name,
-                           "\n",
-                           "LOCA Station: ",
-                           station_abbreviation,
-                           " (",
-                           loca_year[1,]$Station,
-                           ")",sep=""), 
-             size = 3,
-             hjust = 0, 
-             vjust = 1) +
-    labs(title = paste(loca_year[,]$Station,
-                       " ",
-                       min(year(loca_year$Time)),
-                       "-",
-                       max(year(loca_year$Time)),
-                       " CMIP5 LOCA vs Obs",
-                       sep = ""),
-         y     = paste('Mean Annual Temperature (°C)',
-                       sep = "") )
-    
-                    
-
-
-```
-
-```{r}
-
-
- 
-  ggplot(data = all_year)  +
-    aes(x     = Time,
-        y     = Total_Precip, 
-        color = Scenario,
-        alpha = Alpha) +
-      geom_line() +
-    geom_smooth(alpha  = 0.1, 
-                method = "loess") +
-    scale_alpha_continuous(range = c(0.3, 1.0),
-                           guide = FALSE)  + 
-    scale_color_manual(values = c("blue", "red", "black")) + 
-    scale_fill_manual( values = c("cyan", "magenta", "grey")) + 
-    theme_bw() + 
-    theme(plot.title = element_text(hjust = 0.5)) +
-    annotate("text", 
-             x=min(all_year$Time), 
-             y=Inf, 
-             label = paste("\n",
-                           "GHCN Station: ",
-                           ghcn_station_name,
-                           "\n",
-                           "LOCA Station: ",
-                           station_abbreviation,
-                           " (",
-                           loca_year[1,]$Station,
-                           ")",sep=""), 
-             size = 3,
-             hjust = 0, 
-             vjust = 1) +
-    labs(title = paste(loca_year[,]$Station,
-                       " ",
-                       min(year(loca_year$Time)),
-                       "-",
-                       max(year(loca_year$Time)),
-                       " CMIP5 LOCA vs Obs",
-                       sep = ""),
-         y     = paste('Total Precipitation (mm)',
-                       sep = "") )
-    
-                    
-
-
-```
 
 ```{r}
 
@@ -1185,7 +1336,8 @@ We can add a trend line to the data and model
 
  # Plot all the ensembles for one case
 
-  mysubset = subset(all_year_period_1, Scenario!="RCP 8.5")
+  mysubset = subset(x      = all_year_period_1, 
+                    select = Scenario!="RCP 8.5")
   
   ggplot(data=mysubset)  +
     
@@ -1213,7 +1365,8 @@ We can add a trend line to the data and model
 
  # Plot all the ensembles for one case
 
-  mysubset = subset(all_year_period_1, Scenario!="RCP 8.5")
+  mysubset = subset(x      = all_year_period_1, 
+                    subset = Scenario != "RCP 8.5")
   
   ggplot(data=mysubset)  +
     
@@ -1241,7 +1394,8 @@ We can add a trend line to the data and model
 
  # Plot all the ensembles for one case
 
-  mysubset = subset(all_year_period_1, Scenario!="RCP 8.5")
+  mysubset = subset(x      = all_year_period_1, 
+                    subset = Scenario != "RCP 8.5")
   
   ggplot(data=mysubset)  +
     
@@ -1270,8 +1424,8 @@ We can add a trend line to the data and model
 
  # Plot all the ensembles for one case
 
-  mysubset = subset(all_year_period_1, Scenario!="RCP 8.5")
-  
+  mysubset = subset(x      = all_year_period_1, 
+                    subset = Scenario != "RCP 8.5")  
   ggplot(data=mysubset)  +
     
     aes(x     = Total_Precip, 
@@ -1301,10 +1455,11 @@ We can add a trend line to the data and model
 
 ```{r}
 
- # Plot all the ensembles for one case
+ # Plot all the ensembles for all scenarios
 
 
-ggplot(data=subset(all_year,  !is.na(Case)   ))  +
+ggplot(data=subset(x      = all_year,  
+                   select = !is.na(Case) ))  +
     
     aes(x     = Total_Precip, 
         color = Case,
@@ -1332,7 +1487,8 @@ ggplot(data=subset(all_year,  !is.na(Case)   ))  +
  # Plot all the ensembles for one case
 
 
-ggplot(data=subset(all_year,  !is.na(Case)   ))  +
+  ggplot(data=subset(x      = all_year,  
+                   select = !is.na(Case) ))  +
     
     aes(x     = Avg_Temperature, 
         color = Case,
@@ -1361,7 +1517,8 @@ ggplot(data=subset(all_year,  !is.na(Case)   ))  +
 ```{r}
 
 
-ggplot(data=subset(all_daily,  !is.na(Case) & !is.na(Days_Between_Wetting_Rain)   ))  +
+  ggplot(data=subset(x      = all_daily,  
+                     select = !is.na(Case) ))  +
     aes(x     = Days_Between_Wetting_Rain, 
         color = Case, 
         line  = Ensemble,
@@ -1396,7 +1553,8 @@ ggplot(data=subset(all_daily,  !is.na(Case) & !is.na(Days_Between_Wetting_Rain) 
 ```{r}
 
 
-  ggplot(data=subset(all_daily,  !is.na(Case) & !is.na(Days_Between_Wetting_Rain)   ))  +
+  ggplot(data=subset(x      = all_daily,  
+                     select = !is.na(Case) ))  +
     aes(x     = Days_Between_Wetting_Rain, 
         color = Case, 
         alpha = Alpha) +
